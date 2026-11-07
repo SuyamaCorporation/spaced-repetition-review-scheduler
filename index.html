@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>間隔反復復習スケジューラー（SM-2アルゴリズム）</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen">
+<div class="max-w-3xl mx-auto px-4 py-8">
+  <h1 class="text-3xl font-bold text-center mb-2 text-lime-400">間隔反復復習スケジューラー（SM-2）</h1>
+  <p class="text-center text-gray-400 mb-8 text-sm">SM-2アルゴリズムで最適な復習タイミングを自動計算</p>
+
+  <div class="grid grid-cols-3 gap-3 mb-6">
+    <div class="bg-gray-800 rounded-xl p-4 text-center">
+      <div class="text-xs text-gray-400 mb-1">今日の復習</div>
+      <div id="dueCount" class="text-3xl font-bold text-lime-400">0</div>
+      <div class="text-xs text-gray-500">件</div>
+    </div>
+    <div class="bg-gray-800 rounded-xl p-4 text-center">
+      <div class="text-xs text-gray-400 mb-1">総カード数</div>
+      <div id="totalCount" class="text-3xl font-bold text-blue-400">0</div>
+      <div class="text-xs text-gray-500">枚</div>
+    </div>
+    <div class="bg-gray-800 rounded-xl p-4 text-center">
+      <div class="text-xs text-gray-400 mb-1">習熟済み</div>
+      <div id="masteredCount" class="text-3xl font-bold text-green-400">0</div>
+      <div class="text-xs text-gray-500">枚</div>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+    <div class="bg-gray-800 rounded-xl p-6">
+      <h2 class="text-lg font-semibold mb-4 text-lime-300">カード追加</h2>
+      <div class="space-y-3">
+        <div>
+          <label class="block text-xs text-gray-400 mb-1" for="cardFront">表（問題）</label>
+          <textarea id="cardFront" rows="2" placeholder="例: What is photosynthesis?" class="w-full bg-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-lime-500 resize-none" aria-label="カード表面"></textarea>
+        </div>
+        <div>
+          <label class="block text-xs text-gray-400 mb-1" for="cardBack">裏（答え）</label>
+          <textarea id="cardBack" rows="2" placeholder="例: The process by which plants convert light into glucose" class="w-full bg-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-lime-500 resize-none" aria-label="カード裏面"></textarea>
+        </div>
+        <div>
+          <label class="block text-xs text-gray-400 mb-1" for="cardDeck">デッキ（任意）</label>
+          <input id="cardDeck" type="text" placeholder="英単語・歴史・etc" class="w-full bg-gray-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-lime-500" aria-label="デッキ名">
+        </div>
+        <button id="addCard" class="w-full bg-lime-600 hover:bg-lime-500 text-white font-semibold py-2 px-4 rounded-lg transition-colors" aria-label="カードを追加">カードを追加</button>
+      </div>
+    </div>
+
+    <div class="bg-gray-800 rounded-xl p-6" id="reviewPanel">
+      <h2 class="text-lg font-semibold mb-4 text-yellow-300">復習セッション</h2>
+      <div id="reviewContent">
+        <div class="text-gray-500 text-sm text-center py-8">今日の復習カードなし、またはカードを追加してください</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bg-gray-800 rounded-xl p-6">
+    <div class="flex justify-between items-center mb-4">
+      <h2 class="text-lg font-semibold text-gray-300">カード一覧</h2>
+      <button id="clearAll" class="text-xs text-red-400 hover:text-red-300" aria-label="全カード削除">全削除</button>
+    </div>
+    <div id="cardList" class="space-y-2 max-h-64 overflow-y-auto"></div>
+  </div>
+</div>
+
+<script>
+function esc(s) { const d=document.createElement('div'); d.textContent=String(s); return d.innerHTML; }
+function getCards() { return JSON.parse(localStorage.getItem('sm2_cards') || '[]'); }
+function saveCards(arr) { localStorage.setItem('sm2_cards', JSON.stringify(arr.slice(0,100))); }
+
+function todayStr() { return new Date().toISOString().slice(0,10); }
+
+function sm2(card, q) {
+  let { easeFactor, interval, repetitions } = card;
+  if (!easeFactor) easeFactor = 2.5;
+  if (!interval) interval = 1;
+  if (!repetitions) repetitions = 0;
+
+  if (q >= 3) {
+    if (repetitions === 0) interval = 1;
+    else if (repetitions === 1) interval = 6;
+    else interval = Math.round(interval * easeFactor);
+    repetitions++;
+    easeFactor = Math.max(1.3, easeFactor + 0.1 - (5 - q) * (0.08 + (5 - q) * 0.02));
+  } else {
+    repetitions = 0;
+    interval = 1;
+  }
+
+  const nextDate = new Date();
+  nextDate.setDate(nextDate.getDate() + interval);
+  const nextReview = nextDate.toISOString().slice(0,10);
+
+  return { easeFactor: parseFloat(easeFactor.toFixed(2)), interval, repetitions, nextReview };
+}
+
+let reviewQueue = [];
+let currentReviewIdx = 0;
+let showingAnswer = false;
+
+function buildQueue() {
+  const cards = getCards();
+  const today = todayStr();
+  reviewQueue = cards.filter(c => !c.nextReview || c.nextReview <= today);
+  currentReviewIdx = 0;
+  showingAnswer = false;
+}
+
+function renderCounts() {
+  const cards = getCards();
+  const today = todayStr();
+  document.getElementById('totalCount').textContent = cards.length;
+  document.getElementById('dueCount').textContent = cards.filter(c => !c.nextReview || c.nextReview <= today).length;
+  document.getElementById('masteredCount').textContent = cards.filter(c => c.interval && c.interval >= 21).length;
+}
+
+function renderReview() {
+  const container = document.getElementById('reviewContent');
+  buildQueue();
+
+  if (reviewQueue.length === 0) {
+    container.innerHTML = '<div class="text-center py-8"><div class="text-4xl mb-3">🎉</div><div class="text-green-400 font-semibold">今日の復習完了！</div><div class="text-gray-500 text-sm mt-1">新しいカードを追加するか、明日また来てください</div></div>';
+    return;
+  }
+
+  renderCard();
+}
+
+function renderCard() {
+  const container = document.getElementById('reviewContent');
+  if (currentReviewIdx >= reviewQueue.length) {
+    container.innerHTML = '<div class="text-center py-8"><div class="text-4xl mb-3">✅</div><div class="text-green-400 font-semibold">セッション完了！</div><div class="text-gray-500 text-sm mt-1">' + reviewQueue.length + '枚を復習しました</div><button id="restartReview" class="mt-3 text-xs bg-lime-700 hover:bg-lime-600 text-white px-3 py-1.5 rounded" aria-label="もう一度">もう一度</button></div>';
+    document.getElementById('restartReview')?.addEventListener('click', () => { currentReviewIdx = 0; showingAnswer = false; renderCard(); });
+    return;
+  }
+
+  const card = reviewQueue[currentReviewIdx];
+  showingAnswer = false;
+
+  container.innerHTML = `
+    <div class="space-y-3">
+      <div class="flex justify-between items-center">
+        <span class="text-xs text-gray-400">${currentReviewIdx+1} / ${reviewQueue.length}</span>
+        <span class="text-xs text-gray-500">EF: ${(card.easeFactor||2.5).toFixed(2)} | インターバル: ${card.interval||1}日</span>
+      </div>
+      ${card.deck ? `<div class="text-xs text-lime-600 font-medium">#${esc(card.deck)}</div>` : ''}
+      <div class="bg-gray-700 rounded-xl p-4 min-h-[80px] flex items-center justify-center">
+        <p class="text-sm text-gray-200 text-center">${esc(card.front)}</p>
+      </div>
+      <button id="showAnswer" class="w-full bg-gray-600 hover:bg-gray-500 text-white py-2 rounded-lg text-sm font-semibold transition-colors" aria-label="答えを見る">答えを見る</button>
+    </div>
+  `;
+
+  document.getElementById('showAnswer').addEventListener('click', showAnswer);
+}
+
+function showAnswer() {
+  const card = reviewQueue[currentReviewIdx];
+  showingAnswer = true;
+  const container = document.getElementById('reviewContent');
+
+  container.innerHTML = `
+    <div class="space-y-3">
+      <div class="flex justify-between items-center">
+        <span class="text-xs text-gray-400">${currentReviewIdx+1} / ${reviewQueue.length}</span>
+        <span class="text-xs text-gray-500">EF: ${(card.easeFactor||2.5).toFixed(2)}</span>
+      </div>
+      <div class="bg-gray-700 rounded-xl p-3 min-h-[60px]">
+        <div class="text-xs text-gray-500 mb-1">問題</div>
+        <p class="text-sm text-gray-300">${esc(card.front)}</p>
+      </div>
+      <div class="bg-lime-900/30 border border-lime-700/50 rounded-xl p-3 min-h-[60px]">
+        <div class="text-xs text-lime-500 mb-1">答え</div>
+        <p class="text-sm text-lime-200">${esc(card.back)}</p>
+      </div>
+      <div class="text-xs text-center text-gray-400 mb-1">自己評価（0=完全忘れ / 5=完璧）</div>
+      <div class="grid grid-cols-6 gap-1">
+        ${[0,1,2,3,4,5].map(q => `<button class="ratingBtn py-2 rounded-lg text-sm font-bold transition-colors ${q < 3 ? 'bg-red-900/50 hover:bg-red-800 text-red-200' : 'bg-green-900/50 hover:bg-green-800 text-green-200'}" data-q="${q}" aria-label="評価${q}">${q}</button>`).join('')}
+      </div>
+      <div class="flex justify-between text-xs text-gray-500">
+        <span>← 忘れた</span><span>完璧 →</span>
+      </div>
+    </div>
+  `;
+
+  container.querySelectorAll('.ratingBtn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const q = parseInt(btn.getAttribute('data-q'));
+      submitRating(q);
+    });
+  });
+}
+
+function submitRating(q) {
+  const cards = getCards();
+  const card = reviewQueue[currentReviewIdx];
+  const idx = cards.findIndex(c => c.id === card.id);
+  if (idx >= 0) {
+    const updated = sm2(cards[idx], q);
+    cards[idx] = { ...cards[idx], ...updated };
+    saveCards(cards);
+  }
+
+  currentReviewIdx++;
+  showingAnswer = false;
+  renderCounts();
+  renderCard();
+  renderCardList();
+}
+
+function renderCardList() {
+  const cards = getCards();
+  const container = document.getElementById('cardList');
+  container.innerHTML = '';
+
+  if (cards.length === 0) {
+    container.innerHTML = '<div class="text-gray-500 text-xs">カードなし</div>';
+    return;
+  }
+
+  const today = todayStr();
+  cards.forEach((card, idx) => {
+    const isDue = !card.nextReview || card.nextReview <= today;
+    const div = document.createElement('div');
+    div.className = 'flex items-center justify-between bg-gray-700 rounded-lg px-3 py-2';
+    div.innerHTML = `
+      <div class="flex-1 min-w-0 mr-2">
+        <div class="text-xs text-gray-300 truncate">${esc(card.front)}</div>
+        <div class="text-xs text-gray-500">次回: ${card.nextReview || '今日'} | EF: ${(card.easeFactor||2.5).toFixed(2)} | ${card.interval||1}日間隔</div>
+      </div>
+      <div class="flex items-center gap-2 shrink-0">
+        ${isDue ? '<span class="text-xs bg-lime-700 text-lime-200 px-1.5 py-0.5 rounded">復習</span>' : '<span class="text-xs bg-gray-600 text-gray-400 px-1.5 py-0.5 rounded">待機</span>'}
+        <button class="deleteCard text-xs text-red-400 hover:text-red-300" data-idx="${idx}" aria-label="削除">×</button>
+      </div>
+    `;
+    container.appendChild(div);
+  });
+
+  container.querySelectorAll('.deleteCard').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const arr = getCards();
+      arr.splice(parseInt(btn.getAttribute('data-idx')), 1);
+      saveCards(arr);
+      renderCounts();
+      renderReview();
+      renderCardList();
+    });
+  });
+}
+
+document.getElementById('addCard').addEventListener('click', () => {
+  const front = document.getElementById('cardFront').value.trim();
+  const back = document.getElementById('cardBack').value.trim();
+  const deck = document.getElementById('cardDeck').value.trim();
+
+  if (!front || !back) { alert('表と裏を入力してください'); return; }
+
+  const cards = getCards();
+  cards.push({ id: 'c_' + Date.now(), front, back, deck, easeFactor: 2.5, interval: 1, repetitions: 0, nextReview: todayStr() });
+  saveCards(cards);
+
+  document.getElementById('cardFront').value = '';
+  document.getElementById('cardBack').value = '';
+  document.getElementById('cardDeck').value = '';
+
+  renderCounts();
+  renderReview();
+  renderCardList();
+});
+
+document.getElementById('clearAll').addEventListener('click', () => {
+  if (confirm('全カードを削除しますか？')) {
+    localStorage.removeItem('sm2_cards');
+    reviewQueue = [];
+    currentReviewIdx = 0;
+    renderCounts();
+    renderReview();
+    renderCardList();
+  }
+});
+
+renderCounts();
+renderReview();
+renderCardList();
+</script>
+</body>
+</html>
